@@ -5,6 +5,10 @@ import os
 import pathlib
 import re
 import hashlib
+import subprocess
+
+OBSIDIAN_DIR = ""
+OUTPUT_DIR = ""
 
 def sha256(string):
     return hashlib.sha256(bytes(string, "utf-8")).hexdigest()
@@ -26,58 +30,108 @@ def create_table(folderpath: str):
         cur.execute( "CREATE TABLE 'links' (id, source, target)")
     return con, cur
 
-def walk_dir(path):
+
+def walk_dir(path, files=None):
+    if files is None:
+        files = {}
     for name in os.listdir(path):
         abs_name = os.path.join(path, name)
         if os.path.isfile(abs_name) and pathlib.Path(abs_name).suffix == ".md":
-            yield abs_name
-        elif os.path.isdir(abs_name) and "." not in name:
-                yield from walk_dir(abs_name)
+            rel_path = pathlib.Path(abs_name).relative_to(OBSIDIAN_DIR)
+            rel_path = str(rel_path).rsplit(".", 1)[0]
+            files[rel_path] = sha256(abs_name)
+        elif os.path.isdir(abs_name) and "." not in name and name not in "templates":
+                folder_dest = pathlib.Path(abs_name).relative_to(OBSIDIAN_DIR)
+                folder_dest = OUTPUT_DIR / folder_dest
+                os.makedirs(folder_dest, exist_ok=True)
+                print(f"Create folder: {folder_dest}")
+                walk_dir(abs_name, files)
+    return files
 
-def search_relations(files, cur):
-    rlink = re.compile(r"\[\[([A-Za-z0-9\s_]+)(?:\|(\w+))?\]\]")
+
+def search_relations(files, org_files):
+    rlink = re.compile(r"\[\[([A-Za-z0-9\s_./-]+)(?:\|(\w+))?\]\]")
     broken = []
     to_return = []
-    def search_links(_file, add):
-        with open(_file, "r", encoding="utf-8") as open_file:
+    for _file in files.keys():
+        _file_path = pathlib.Path(os.path.join(OBSIDIAN_DIR, f"{_file}.md"))
+        org_path = pathlib.Path(os.path.join(OUTPUT_DIR, _file) + ".org")
+        org_content = org_path.read_text(encoding="utf-8")
+        with open(_file_path, "r", encoding="utf-8") as open_file:
             content = open_file.read()
-            out = rlink.findall(content)
-            if len(out) > 0:
-                for match in out:
-                    res = cur.execute("SELECT id FROM nodes WHERE name = ? or title = ?", (match[0], match[0]))
-                    fetch = res.fetchall()
-                    if len(fetch) == 0:
-                        if add:
-                            broken.append((_file, match[0]))
-                        print(f" Append {broken[-1]} to broken list")
-                    elif len(fetch) > 1:
-                        print(f"Conflict found in {_file}")
-                        raise Exception()
-                    else:
-                        print("entra")
-                        return sha256(_file), fetch[0][0]
-    for _file in files:
-        to_return.append(search_links(_file, True))
+        out = rlink.findall(content)
+        if len(out) > 0:
+            for match in out:
+                print(match)
+                search = match[0] if ".md" not in match[0] else match[0].split(".md")[0]
+                if search in files:
+                    fetch = [(search, files[search])]
+                else:
+                    fetch = [(file, hashval) for file, hashval in files.items() if file.endswith(f"/{search}")] 
+                if len(fetch) == 0:
+                    broken.append((_file, match[0]))
+                    print("broken")
+                    continue
+                elif len(fetch) > 1:
+                    print(f"Conflict found in file {_file} with link {search}")
+                    menu = '\n'.join(f"[{pos}] {file}" for pos, (file, hashval) in enumerate(fetch))
+                    val = input(f"Availables options are:\n{menu}")
+                    if val.isnumeric():
+                        fetch = [fetch[int(val)]]
+                to_return.append((files[_file], fetch[0][1]))
+                if match[1] != '':
+                    org_content = org_content.replace(f"[[{match[0]}|{match[1]}]]", f"[[id:{fetch[0][1]}][{match[1]}]]")
+                else:
+                    org_content = org_content.replace(f"[[{match[0]}]]", f"[[id:{fetch[0][1]}][{match[0]}]]")
+            with open(org_path, "w", encoding="utf-8") as open_file:
+                open_file.write(org_content)
+                print(f"Write in file {org_path}")
 
-    for _file in broken:
-        to_return.append(search_links(_file[0], False))
+    yield from filter(lambda x: x is not None, to_return)
 
-    yield from to_return
+
+def convert_file(files):
+    for file, iden in files.items():
+        org_file = pathlib.Path(OUTPUT_DIR) / (file + ".org")
+        process = [
+            "pandoc",
+            "--from=markdown-auto_identifiers",
+            "--to=org",
+            "-s",
+            "--output",
+            str(org_file),
+            os.path.join(OBSIDIAN_DIR, file) + ".md"
+        ]
+        return_code = subprocess.run(process)
+        if return_code.returncode:
+            process2 = ["echo"]
+            process2.extend(process)
+            subprocess.run(process2)
+            print(return_code)
+            exit(-1)
+        # add id property to org file
+        with open(org_file, "r+", encoding="utf-8") as open_file:
+            content = open_file.read()
+            open_file.seek(0, 0)
+            open_file.write(f":PROPERTIES:\n:ID: {iden}\n:END:\n{content}")
+        yield org_file
 
 
 def create(args):
+    global OBSIDIAN_DIR
+    global OUTPUT_DIR
     if directory is None:
-        raise Exception("Create action need a directory")
+        raise Exception("action 'Create' needs a directory")
+    OBSIDIAN_DIR = args.directory
+    OUTPUT_DIR = args.output
     con, cur = create_table(args.directory)
-    files = list(walk_dir(args.directory))
-    relations = list(search_relations(files, cur))
-    print(relations)
-    exit(0)
+    files = walk_dir(args.directory)
+    org_files = list(convert_file(files))
+    relations = list(search_relations(files, org_files))
     with con:
-        cur.executemany("INSERT INTO nodes VALUES (?, ?, ?)", [(sha256(path), path, path.split("/")[0]) for path in files])
-        cur.executemany("INSERT INTO links values (?, ?, ?)", [(sha256(f"{source[0]}-{source[1]}"), source[0], source[1] ) for source in relations])
+        cur.executemany("INSERT INTO nodes VALUES (?, ?, ?)", [(identify, path, path.split("/")[0]) for identify, path in files.items()])
+        cur.executemany("INSERT INTO links values (?, ?, ?)", [(sha256(f"{source[0]}-{source[1]}"), source[0], source[1] ) for source in relations if source is not None])
     con.close()
-
 
 
 def main(args):
@@ -91,6 +145,7 @@ def directory(path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Script to get a vault in markdown and generate a database with sqlite")
-    parser.add_argument("action", choices=["create", "graph"])
+    parser.add_argument("action", choices=["create", "migrate"])
     parser.add_argument("--dir", "-d", type=directory, dest="directory", default=None)
+    parser.add_argument("--output", "-o", type=directory, dest="output", default=None)
     main(parser.parse_args())
