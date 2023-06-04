@@ -1,2 +1,31 @@
-* Vault visualise
+* Obsidian 2 org-roam
+
+This scripts aims to help you to migrate from Obsidian to org-roam.
+
+** Usage
+
+1. Export your Obsidian vault to markdown files *done by default*
+2. Run the script with the path to your vault as argument and the path to the org-roam directory as second argument
+
+#+begin_export shell
+./main.py -d /path/to/your/obsidian/vault -o /path/to/your/org-roam/directory create
+#+end_export
+
+3. Open emacs and run `org-roam-db-build-cache` to build the org-roam database
+4. Enjoy your new org-roam vault
+
+** Dependencies
+
+- python3
+- [[https://pandoc.org/][pandoc]]
+
+** Features
+
+To make the migration as smooth as possible, this script will create a database 
+of all your notes and their links. This database will contain the following tables:
+
+- Notes: a hash of the note path, the path and the tittle of the note
+- Links: a hash of the source note path and the hash of the target note path
+
+This database uses sqlite3 and create a file on the current directory with the name of the vault.
 
