@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "obsidian2org-roam"
+version = "0.1.0"
+description = "Migrate obsidian vault to org roam folder"
+authors = ["Lucas Elvira Martín <lucaselvira96@gmail.com>"]
+license = "GPL-3"
+readme = "README.org"
+packages = [{include = "obsidian2org_roam"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+[tool.poetry.scripts]
+main = "obsidian2org_roam.main:main"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -62,7 +62,6 @@ def search_relations(files, org_files):
         out = rlink.findall(content)
         if len(out) > 0:
             for match in out:
-                print(match)
                 search = match[0] if ".md" not in match[0] else match[0].split(".md")[0]
                 if search in files:
                     fetch = [(search, files[search])]
@@ -70,7 +69,6 @@ def search_relations(files, org_files):
                     fetch = [(file, hashval) for file, hashval in files.items() if file.endswith(f"/{search}")] 
                 if len(fetch) == 0:
                     broken.append((_file, match[0]))
-                    print("broken")
                     continue
                 elif len(fetch) > 1:
                     print(f"Conflict found in file {_file} with link {search}")
@@ -85,7 +83,6 @@ def search_relations(files, org_files):
                     org_content = org_content.replace(f"[[{match[0]}]]", f"[[id:{fetch[0][1]}][{match[0]}]]")
             with open(org_path, "w", encoding="utf-8") as open_file:
                 open_file.write(org_content)
-                print(f"Write in file {org_path}")
 
     yield from filter(lambda x: x is not None, to_return)
 
@@ -97,7 +94,6 @@ def convert_file(files):
             "pandoc",
             "--from=markdown-auto_identifiers",
             "--to=org",
-            "-s",
             "--output",
             str(org_file),
             os.path.join(OBSIDIAN_DIR, file) + ".md"
@@ -109,11 +105,32 @@ def convert_file(files):
             subprocess.run(process2)
             print(return_code)
             exit(-1)
+        # Get the yaml frontmatter and convert it to org properties
+        with open(os.path.join(OBSIDIAN_DIR, file) + ".md", "r", encoding="utf-8") as open_file:
+            text = open_file.read()
+        properties = {}
+        if text.startswith("---"):
+            prop = text.split("---", 2)[1]
+            if prop:
+                # If there is some colon in the properties, it will be changed to a dash
+                regex = re.compile(r"((?:- )?\w+):\s*(.*)")
+                matches = regex.findall(prop)
+                for key, value in matches:
+                    properties[key.lower()] = value
+                if "title" not in properties:
+                    properties["title"] = file.split("/")[-1]
         # add id property to org file
         with open(org_file, "r+", encoding="utf-8") as open_file:
             content = open_file.read()
             open_file.seek(0, 0)
-            open_file.write(f":PROPERTIES:\n:ID: {iden}\n:END:\n{content}")
+            open_file.write(f":PROPERTIES:\n:ID: {iden}\n")
+            if "alias" in properties or "aliases" in properties:
+                open_file.write(f":ROAM_ALIAS: {properties.get('alias', properties.get('aliases'))}\n")
+            open_file.write(":END:\n")
+            for key, value in properties.items():
+                if key not in ["alias", "aliases"]:
+                    open_file.write(f"#+{key.upper()}: {value}\n")
+            open_file.write(content)
         yield org_file
 
 
@@ -134,18 +151,20 @@ def create(args):
     con.close()
 
 
-def main(args):
-    if args.action == "create":
-        create(args)
 
 def directory(path):
-    if not os.path.isdir(path):
+    if not path or not os.path.isdir(path):
         raise argparse.ArgumentTypeError(f"'{path}' is not an existing directory")
     return os.path.abspath(path)
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="Script to get a vault in markdown and generate a database with sqlite")
     parser.add_argument("action", choices=["create", "migrate"])
-    parser.add_argument("--dir", "-d", type=directory, dest="directory", default=None)
-    parser.add_argument("--output", "-o", type=directory, dest="output", default=None)
-    main(parser.parse_args())
+    parser.add_argument("--dir", "-d", type=directory, dest="directory", default=None, required=True)
+    parser.add_argument("--output", "-o", type=directory, dest="output", default=None, required=True)
+    args = parser.parse_args()
+    if args.action == "create":
+        create(args)
+
+if __name__ == "__main__":
+    main()
